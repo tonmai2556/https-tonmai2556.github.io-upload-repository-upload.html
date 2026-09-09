@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>ส่งรูปอาหาร</title>
+  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: center; padding: 32px 20px 50px; margin: 0; background: #f8f9fa; color: #222; }
+    .container { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 36px; margin: 20px 0 32px; }
+    .btn { width: 100%; padding: 24px 20px; border: none; border-radius: 20px; font-size: 28px; font-weight: 700; color: #fff; cursor: pointer; margin-top: 18px; -webkit-tap-highlight-color: transparent; }
+    .btn-select { background: #06C755; }
+    .btn-upload { background: #03303A; }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    #preview { display: none; width: 100%; max-height: 60vh; object-fit: contain; margin-top: 28px; border-radius: 20px; background: #ddd; }
+    #status { margin: 24px 0 0; min-height: 54px; white-space: pre-wrap; word-break: break-word; font-size: 20px; line-height: 1.5; color: #666; }
+    .debug { margin-top: 20px; padding: 14px; border-radius: 12px; background: #eee; text-align: left; font-size: 13px; color: #555; white-space: pre-wrap; word-break: break-word; display: none; }
+    .hint { margin-top: 16px; color: #777; font-size: 16px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📸 ถ่ายรูป/อัปโหลดภาพอาหาร</h1>
+    <input type="file" id="imageInput" accept="image/*" capture="environment" style="display:none">
+    <button type="button" id="selectBtn" class="btn btn-select">เลือกรูปหรือถ่ายภาพ</button>
+    <img id="preview" alt="ตัวอย่างรูปอาหาร">
+    <button type="button" id="uploadBtn" class="btn btn-upload" style="display:none;">ส่งข้อมูลอาหาร</button>
+    <div id="status">⏳ กำลังเริ่มต้น LIFF...</div>
+    <div class="hint">เลือกรูปอาหาร 1 รูป แล้วกด “ส่งข้อมูลอาหาร”</div>
+    <pre id="debug" class="debug"></pre>
+  </div>
+
+  <script>
+    const LIFF_ID = "2011462998-ckPKfFGq";
+    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxHNbmR2jbepNVPJviZqMbxmRIkgo9hY3rijubDWWChtmJO0xYPuSYaibQj3Wa1-78/exec";
+
+    let userId = "";
+    let userName = "";
+    let base64Image = "";
+    let selectedFileName = "";
+    let isLiffReady = false;
+
+    const imageInput = document.getElementById("imageInput");
+    const selectBtn = document.getElementById("selectBtn");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const preview = document.getElementById("preview");
+    const statusElem = document.getElementById("status");
+    const debugElem = document.getElementById("debug");
+
+    function setStatus(message) { statusElem.innerText = message; }
+    function debug(message) { console.log(message); debugElem.style.display = "block"; debugElem.textContent += message + "\n"; }
+    function clearDebug() { debugElem.textContent = ""; debugElem.style.display = "none"; }
+
+    async function refreshProfile() {
+      const profile = await liff.getProfile();
+      userId = profile.userId || "";
+      userName = profile.displayName || "ผู้ใช้งาน";
+      return profile;
+    }
+
+    async function initLIFF() {
+      clearDebug();
+      try {
+        setStatus("⏳ กำลังเริ่มต้น LIFF...");
+        if (typeof liff === "undefined") throw new Error("ไม่พบ LINE LIFF SDK");
+
+        await liff.init({ liffId: LIFF_ID });
+
+        debug("[LIFF] initialized");
+        debug("[LIFF] version: " + liff.getVersion());
+        debug("[LIFF] isInClient: " + liff.isInClient());
+        debug("[LIFF] isLoggedIn: " + liff.isLoggedIn());
+        debug("[LIFF] href: " + window.location.href);
+
+        if (!liff.isLoggedIn()) {
+          if (liff.isInClient()) {
+            throw new Error("LIFF ยังไม่เข้าสู่ระบบ กรุณาปิดหน้าแล้วเปิดผ่าน LINE ใหม่");
+          }
+          setStatus("⏳ กำลังเข้าสู่ระบบ LINE...");
+          liff.login({ redirectUri: window.location.href });
+          return;
+        }
+
+        await refreshProfile();
+        if (!userId) throw new Error("ไม่พบ LINE User ID");
+
+        isLiffReady = true;
+        setStatus("✅ เชื่อมต่อ LINE สำเร็จ\nผู้ใช้: " + userName);
+        debug("[LIFF] userId: " + userId);
+        debug("[LIFF] userName: " + userName);
+      } catch (error) {
+        console.error("[LIFF ERROR]", error);
+        isLiffReady = false;
+        setStatus("❌ ไม่สามารถเชื่อมต่อ LINE ได้\n" + (error.message || String(error)));
+        debug("[LIFF ERROR] " + (error.stack || error.message || error));
+      }
+    }
+
+    selectBtn.addEventListener("click", () => imageInput.click());
+
+    imageInput.addEventListener("change", () => {
+      const file = imageInput.files && imageInput.files[0];
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        alert("กรุณาเลือกไฟล์รูปภาพ");
+        imageInput.value = "";
+        return;
+      }
+
+      selectedFileName = file.name;
+      compressImage(file)
+        .then(result => {
+          base64Image = result.base64;
+          preview.src = result.dataUrl;
+          preview.style.display = "block";
+          uploadBtn.style.display = "block";
+          setStatus("✅ เลือกรูปแล้ว\nพร้อมส่งข้อมูลอาหาร");
+          debug("[IMAGE] original: " + file.name + " (" + Math.round(file.size / 1024) + " KB)");
+          debug("[IMAGE] compressed: " + Math.round(result.bytes / 1024) + " KB");
+        })
+        .catch(error => {
+          console.error("[IMAGE ERROR]", error);
+          base64Image = "";
+          setStatus("❌ ไม่สามารถประมวลผลรูปภาพได้\n" + error.message);
+        });
+    });
+
+    function compressImage(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = event => {
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const MAX_WIDTH = 1600;
+              const MAX_HEIGHT = 1600;
+              let width = img.width;
+              let height = img.height;
+              const scale = Math.min(1, MAX_WIDTH / width, MAX_HEIGHT / height);
+              width = Math.round(width * scale);
+              height = Math.round(height * scale);
+
+              const canvas = document.createElement("canvas");
+              canvas.width = width;
+              canvas.height = height;
+              const ctx = canvas.getContext("2d");
+              if (!ctx) throw new Error("ไม่สามารถสร้าง Canvas ได้");
+              ctx.drawImage(img, 0, 0, width, height);
+
+              const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+              const commaIndex = dataUrl.indexOf(",");
+              if (commaIndex === -1) throw new Error("ไม่สามารถแปลงรูปเป็น Base64 ได้");
+              const base64 = dataUrl.substring(commaIndex + 1);
+
+              resolve({ base64, dataUrl, bytes: Math.ceil(base64.length * 0.75) });
+            } catch (error) { reject(error); }
+          };
+          img.onerror = () => reject(new Error("ไม่สามารถอ่านรูปภาพได้"));
+          img.src = event.target.result;
+        };
+        reader.onerror = () => reject(new Error("ไม่สามารถอ่านไฟล์รูปภาพได้"));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    uploadBtn.addEventListener("click", uploadFoodImage);
+
+    async function uploadFoodImage() {
+      clearDebug();
+      if (!base64Image) { alert("กรุณาเลือกรูปภาพก่อนครับ"); return; }
+
+      uploadBtn.disabled = true;
+      selectBtn.disabled = true;
+
+      try {
+        if ((!isLiffReady || !userId) && typeof liff !== "undefined" && liff.isLoggedIn()) {
+          await refreshProfile();
+        }
+        if (!userId) throw new Error("ไม่พบ LINE User ID\nกรุณาเปิดหน้านี้ผ่าน LIFF จากใน LINE");
+        if (!APPS_SCRIPT_URL) throw new Error("ไม่พบ Apps Script Web App URL");
+
+        const payload = {
+          action: "uploadFood",
+          userId: userId,
+          userName: userName,
+          imageBase64: base64Image,
+          fileName: selectedFileName
+        };
+
+        debug("========== UPLOAD DEBUG ==========");
+        debug("User ID: " + userId);
+        debug("Display Name: " + userName);
+        debug("File: " + selectedFileName);
+        debug("Base64 length: " + base64Image.length);
+        debug("Endpoint: " + APPS_SCRIPT_URL);
+
+        setStatus("⏳ กำลังส่งและบันทึกรูปอาหาร...");
+
+        const response = await fetch(APPS_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify(payload)
+        });
+
+        const responseText = await response.text();
+        debug("[SERVER] HTTP status: " + response.status);
+        debug("[SERVER] response: " + responseText.substring(0, 1000));
+
+        if (!responseText) throw new Error("Apps Script ไม่ส่งข้อมูลตอบกลับ");
+
+        let result;
+        try { result = JSON.parse(responseText); }
+        catch (_) { throw new Error("Apps Script ส่ง response ที่ไม่ใช่ JSON:\n" + responseText.substring(0, 500)); }
+
+        if (result.status !== "success") {
+          throw new Error(result.message || "Apps Script ไม่สามารถบันทึกข้อมูลได้");
+        }
+
+        setStatus("✅ บันทึกข้อมูลอาหารสำเร็จ!");
+        if (result.fileUrl) debug("[SERVER] fileUrl: " + result.fileUrl);
+
+        setTimeout(() => {
+          if (typeof liff !== "undefined" && liff.isInClient()) liff.closeWindow();
+        }, 1500);
+      } catch (error) {
+        console.error("[UPLOAD ERROR]", error);
+        setStatus("❌ ส่งข้อมูลไม่สำเร็จ\n" + (error.message || String(error)));
+        uploadBtn.disabled = false;
+        selectBtn.disabled = false;
+      }
+    }
+
+    selectBtn.disabled = false;
+    initLIFF();
+  </script>
+</body>
+</html>
